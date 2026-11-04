@@ -1,4 +1,7 @@
-import { loadSnapshot, saveSnapshot } from './storage.js';
+import { CloudSync } from './cloud.js?v=3';
+let cloudClient;
+let cloud = null, accountScope = 'guest';
+import { loadSnapshot, saveSnapshot } from './storage.js?v=3';
 const serverMode = window.RIXU_CONFIG?.storage === 'server';
 let snapshotAvailable = false;
 const $ = s => document.querySelector(s);
@@ -12,7 +15,7 @@ const escape = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const weekday = s => ['周日','周一','周二','周三','周四','周五','周六'][parseDate(s).getDay()];
 const fullDate = s => {const d=parseDate(s);return `${d.getMonth()+1}月${d.getDate()}日 ${weekday(s)}`};
-const storageKey='rixu-data-v1', queueKey='rixu-pending-v1';
+let storageKey='rixu-data-v1', queueKey='rixu-pending-v1';
 let storageAvailable=true;
 function read(key,fallback){try{return JSON.parse(localStorage.getItem(key))??fallback}catch{return fallback}}
 function write(key,value){try{localStorage.setItem(key,JSON.stringify(value));return true}catch{storageAvailable=false;toast('本机存储不可用，请及时导出备份');return false}}
@@ -32,11 +35,11 @@ function matchesSearch(t){return !state.search||`${t.title} ${t.notes||''} ${t.c
 function inFilter(t,f){const td=today(),ws=weekStart(td);if(f==='trash')return !!t.deletedAt;if(t.deletedAt)return false;switch(f){case'today':return t.date===td;case'tomorrow':return t.date===addDays(td,1);case'week':return t.date>=ws&&t.date<=addDays(ws,6);case'nextweek':return t.date>=addDays(ws,7)&&t.date<=addDays(ws,13);case'month':return t.date?.slice(0,7)===td.slice(0,7);case'unscheduled':return !t.date;case'overdue':return !!t.date&&t.date<td&&!t.completed;case'done':return t.completed;default:return true}}
 function filterTasks(f=state.filter){return sortTasks(tasks.filter(t=>inFilter(t,f)&&matchesSearch(t)&&(f==='trash'||f==='done'||prefs.showCompleted||!t.completed)))}
 function saveLocal(){write(storageKey,tasks);if(serverMode)write(queueKey,pending);persistSnapshot();render();sync()}
-function persistSnapshot(){saveSnapshot(tasks).then(()=>{snapshotAvailable=true;updateSync()}).catch(()=>{snapshotAvailable=false;if(!storageAvailable)toast("设备保存失败，请立即导出备份");updateSync()})}
-function mutate(id,patch){const now=new Date().toISOString();patch={...patch,updatedAt:now};let existing=tasks.find(t=>t.id===id);if(existing)Object.assign(existing,patch);else tasks.push({id,createdAt:now,...patch});if(serverMode)pending.push({opId:uid(),id,patch:{...(existing?{}:{createdAt:now}),...patch}});if(!importBusy)saveLocal()}
+function persistSnapshot(){saveSnapshot(tasks,accountScope).then(()=>{snapshotAvailable=true;updateSync()}).catch(()=>{snapshotAvailable=false;if(!storageAvailable)toast("设备保存失败，请立即导出备份");updateSync()})}
+function mutate(id,patch){const original=tasks.find(t=>t.id===id);const base=original?structuredClone(original):{};if(original){patch=Object.fromEntries(Object.entries(patch).filter(([key,value])=>JSON.stringify(value)!==JSON.stringify(original[key])))}const now=new Date().toISOString();patch={...(!original?{createdAt:now}:{}),...patch,updatedAt:now};let existing=tasks.find(t=>t.id===id);if(existing)Object.assign(existing,patch);else tasks.push({id,createdAt:now,...patch});if(serverMode)pending.push({opId:uid(),id,patch:{...(existing?{}:{createdAt:now}),...patch}});if(cloud?.user)cloud.record(id,patch,base);if(!importBusy)saveLocal()}
 function toast(message){$('#toast').textContent=message;$('#toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').hidden=true,3300)}
-function updateSync(){const text=!storageAvailable?(snapshotAvailable?'已存入设备备用存储':'保存异常，请导出'):!serverMode?'已保存在此设备':connected?(pending.length?'正在同步…':'已保存到本机服务'):'仅保存在此设备';$('#sync-status').textContent=text;$('#sync-status').title=!serverMode?'记录保存在当前设备，尚未启用跨设备云同步':connected?'同一服务地址下的设备共享数据':'离线数据保存在当前设备，联网后会尝试同步'}
-async function sync(){if(!serverMode||busy||importBusy||location.protocol==='file:')return;busy=true;try{if(pending.length){const batch=pending.slice();const r=await fetch('/api/tasks',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({operations:batch}),signal:AbortSignal.timeout(7000)});if(!r.ok)throw Error('sync');const result=await r.json();const sent=new Set(batch.map(o=>o.opId));pending=pending.filter(o=>!sent.has(o.opId));tasks=result.tasks;overlayPending();write(queueKey,pending);write(storageKey,tasks);persistSnapshot()}else{const r=await fetch('/api/tasks',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error('fetch');const result=await r.json();if(!result.initialized&&!tasks.length&&!localStorage.getItem('rixu-initialized')){seed();busy=false;return sync()}tasks=result.tasks;overlayPending();write(storageKey,tasks);persistSnapshot()}connected=true;lastSuccess=Date.now();render()}catch{connected=false;updateSync()}finally{busy=false;if(pending.length&&connected)setTimeout(sync,200)}}
+function updateSync(){renderCloud();if(cloud?.user){$('#sync-status').textContent=cloud.status;$('#sync-status').title='当前账号的计划会在联网时自动同步';return}const text=!storageAvailable?(snapshotAvailable?'已存入设备备用存储':'保存异常，请导出'):!serverMode?'已保存在此设备':connected?(pending.length?'正在同步…':'已保存到本机服务'):'仅保存在此设备';$('#sync-status').textContent=text;$('#sync-status').title=!serverMode?'记录保存在当前设备，尚未启用跨设备云同步':connected?'同一服务地址下的设备共享数据':'离线数据保存在当前设备，联网后会尝试同步'}
+async function sync(){if(cloud?.user)return cloud.sync();if(!serverMode||busy||importBusy||location.protocol==='file:')return;busy=true;try{if(pending.length){const batch=pending.slice();const r=await fetch('/api/tasks',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({operations:batch}),signal:AbortSignal.timeout(7000)});if(!r.ok)throw Error('sync');const result=await r.json();const sent=new Set(batch.map(o=>o.opId));pending=pending.filter(o=>!sent.has(o.opId));tasks=result.tasks;overlayPending();write(queueKey,pending);write(storageKey,tasks);persistSnapshot()}else{const r=await fetch('/api/tasks',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error('fetch');const result=await r.json();if(!result.initialized&&!tasks.length&&!localStorage.getItem('rixu-initialized')){seed();busy=false;return sync()}tasks=result.tasks;overlayPending();write(storageKey,tasks);persistSnapshot()}connected=true;lastSuccess=Date.now();render()}catch{connected=false;updateSync()}finally{busy=false;if(pending.length&&connected)setTimeout(sync,200)}}
 function overlayPending(){for(const op of pending){let t=tasks.find(t=>t.id===op.id);if(t)Object.assign(t,op.patch);else tasks.push({id:op.id,...op.patch})}}
 function seed(){const td=today();const examples=[['给今天排个轻重缓急',td,'09:00','生活',true,'花五分钟，选出今天最值得完成的一件事。','normal'],['读完正在看的那一章',td,'10:30','学习',false,'不追求读得多，记下一点自己的想法。','high'],['整理本周的工作安排',td,'14:00','工作',false,'把大事拆小一点，给自己留一些余地。','high'],['出门走走，顺路买点水果',td,'17:30','生活',false,'慢慢走，看看今天的天空。','normal'],['回顾今天，准备明天',td,'21:00','生活',false,'完成了什么？有什么可以明天继续？','normal'],['整理读书笔记',addDays(td,1),'10:00','学习',false,'','normal'],['完成项目资料初稿',addDays(td,1),'14:30','工作',false,'','high'],['周末给自己做顿饭',addDays(weekStart(td),5),'18:00','生活',false,'','normal'],['规划下一周',addDays(weekStart(td),7),'09:00','生活',false,'','normal'],['找时间整理一下照片','','','生活',false,'不急，想起来的时候再做。','normal'],['补上昨天的阅读记录',addDays(td,-1),'20:00','学习',true,'过去的计划也能补建、补记完成。','normal']];for(const [title,date,time,category,completed,notes,priority]of examples){const id=uid(),now=new Date().toISOString(),patch={title,date,time,category,completed,notes,priority,completedDate:completed?date:'',createdAt:now,updatedAt:now,deletedAt:null};tasks.push({id,...patch});pending.push({opId:uid(),id,patch})}write('rixu-initialized',true);write(storageKey,tasks);write(queueKey,pending);render()}
 function taskCard(t,compact=false){return `<article class="${compact?'week-task':'task-card'} ${t.completed?'completed':''}" data-task-id="${escape(t.id)}">${t.deletedAt?'':`<button class="check ${t.completed?'checked':''} ${t.priority==='high'?'high':''}" data-toggle="${escape(t.id)}" aria-label="${t.completed?'撤销完成':'标记完成'}：${escape(t.title)}" aria-pressed="${!!t.completed}">${t.completed?checkIcon:''}</button>`}<button class="task-detail" data-edit="${escape(t.id)}"><span class="task-name">${escape(t.title)}</span><span class="task-meta">${t.time?`<span class="task-time">${escape(t.time)}</span>`:''}<span class="tag ${t.category==='工作'?'work':t.category==='学习'?'study':''}">${escape(t.category||'生活')}</span>${t.priority==='high'?'<span class="priority-dot" title="重要"></span>':''}${t.completed&&t.completedDate?`<span>${escape(t.completedDate.slice(5).replace('-','/'))} 完成</span>`:''}</span>${t.notes&&!compact?`<span class="task-note">${escape(t.notes)}</span>`:''}</button>${t.deletedAt?`<button class="restore-button" data-restore="${escape(t.id)}">恢复</button>`:compact?'':`<button class="task-menu" data-edit="${escape(t.id)}" aria-label="编辑：${escape(t.title)}">···</button>`}</article>`}
@@ -55,7 +58,7 @@ $('#task-title').addEventListener('input',()=>$('#task-title').setCustomValidity
 $('#task-completed').addEventListener('change',()=>{$('#completed-date-field').hidden=!$('#task-completed').checked;if(!$('#task-id').value)$('#task-completed-date').value=$('#task-date').value||today()});
 function confirmAction(title,message){return new Promise(resolve=>{const dialog=$('#confirm-dialog');$('#confirm-title').textContent=title;$('#confirm-message').textContent=message;const finish=result=>{dialog.close();resolve(result)};$('#confirm-ok').onclick=()=>finish(true);$('#confirm-cancel').onclick=()=>finish(false);dialog.oncancel=e=>{e.preventDefault();finish(false)};dialog.showModal()})}
 async function deleteTask(){const id=$('#task-id').value;if(await confirmAction('移入回收站？','计划和完成记录都会保留，可以随时恢复。')){mutate(id,{deletedAt:new Date().toISOString()});closeEditor();toast('已移入回收站')}}
-function renderSettings(){$('#storage-description').textContent=!serverMode?'记录只保存在当前设备，并保存一份设备内备用快照；不会上传到网站或 GitHub。手机与平板尚未启用云同步，可用导出、导入备份转移。':connected?'当前数据保存在本机服务。连接同一个服务地址的设备会自动同步；离线修改会暂存在当前设备，重新连接后提交。':'当前数据保存在此设备的浏览器中。请导出备份；连接本机服务后可同步。';$('#settings-stats').innerHTML=`<span>${activeTasks().length} 个计划</span><span>${activeTasks().filter(t=>t.completed).length} 个已完成</span><span>${tasks.filter(t=>t.deletedAt).length} 个回收站</span>`}
+function renderSettings(){renderCloud();$('#storage-description').textContent=cloud?.user?'当前显示此账号的计划。离线修改保存在设备，恢复连接后同步；冲突会保留副本。退出后仅显示未登录的本机计划。':!serverMode?'记录只保存在当前设备，并保存一份设备内备用快照；不会上传到网站或 GitHub。可在上方登录同一邮箱账号启用手机和平板同步。':connected?'当前数据保存在本机服务。连接同一个服务地址的设备会自动同步；离线修改会暂存在当前设备，重新连接后提交。':'当前数据保存在此设备的浏览器中。请导出备份；连接本机服务后可同步。';$('#settings-stats').innerHTML=`<span>${activeTasks().length} 个计划</span><span>${activeTasks().filter(t=>t.completed).length} 个已完成</span><span>${tasks.filter(t=>t.deletedAt).length} 个回收站</span>`}
 function exportData(){const data={app:'rixu',version:1,exportedAt:new Date().toISOString(),tasks};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`日序备份-${today()}.json`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);toast('已生成备份，请查看下载列表或选择保存到文件')}
 function validateTask(t){return t&&typeof t==='object'&&typeof t.id==='string'&&t.id.length>0&&t.id.length<=100&&typeof t.title==='string'&&t.title.trim().length>0&&t.title.length<=200&&typeof t.date==='string'&&(!t.date||validDate(t.date))&&typeof t.completed==='boolean'&&['生活','学习','工作'].includes(t.category)&&['normal','high'].includes(t.priority)&&typeof t.notes==='string'&&t.notes.length<=10000&&typeof t.time==='string'&&(!t.time||/^([01]\d|2[0-3]):[0-5]\d$/.test(t.time))&&(!t.time||!!t.date)&&(!t.completedDate||validDate(t.completedDate))}
 function validDate(s){return /^\d{4}-\d\d-\d\d$/.test(s)&&s>='1900-01-01'&&s<='2200-12-31'&&dateKey(parseDate(s))===s}
@@ -64,7 +67,7 @@ function setShowCompleted(value){prefs.showCompleted=value;write('rixu-prefs-v1'
 $('#settings-show-completed').addEventListener('change',e=>setShowCompleted(e.target.checked));
 $('#search').addEventListener('input',e=>{state.search=e.target.value.trim();render()});
 function shiftMonth(s,n){const d=parseDate(s);d.setDate(1);d.setMonth(d.getMonth()+n);return dateKey(d)}
-document.addEventListener('click',async e=>{const b=e.target.closest('button,a.brand,[data-select]');if(!b)return;if(b.matches('a.brand')){e.preventDefault();state.page='list';state.filter='today';render();return}const ds=b.dataset;if(ds.page){state.page=ds.page;render()}else if(ds.filter){state.filter=ds.filter;state.page='list';render()}else if(ds.view){state.view=ds.view;render()}else if(ds.edit){openEditor(ds.edit)}else if(ds.toggle){const t=tasks.find(t=>t.id===ds.toggle);mutate(t.id,{completed:!t.completed,completedDate:!t.completed?(t.date&&t.date<today()?t.date:today()):''})}else if(ds.restore){mutate(ds.restore,{deletedAt:null});toast('计划已恢复')}else if(ds.newDate){openEditor(null,ds.newDate)}else if(ds.select){state.selected=ds.select;if(state.page!=='calendar'){state.page='calendar';state.view='month';state.anchor=ds.select}render()}else if(ds.mini){state.miniMonth=shiftMonth(state.miniMonth,Number(ds.mini));renderMini()}else if(ds.date){$('#task-date').value=ds.date==='today'?today():ds.date==='tomorrow'?addDays(today(),1):'';if(ds.date==='none')$('#task-time').value=''}else switch(ds.action){case'new':openEditor();break;case'install':$('#install-dialog').showModal();break;case'close-install':$('#install-dialog').close();break;case'close-editor':closeEditor();break;case'delete-task':deleteTask();break;case'copy-task':$('#task-id').value='';$('#editor-heading').textContent='复制计划';$('#editor-extra').hidden=true;$('#task-completed').checked=false;$('#completed-date-field').hidden=true;toast('修改日期后保存，即可保留两份计划');break;case'settings':renderSettings();$('#settings-dialog').showModal();break;case'close-settings':$('#settings-dialog').close();break;case'export':exportData();break;case'import':$('#import-file').click();break;case'toggle-completed':setShowCompleted(!prefs.showCompleted);break;case'hide-demo':prefs.hideDemo=true;write('rixu-prefs-v1',prefs);render();break;case'search':$('#search-wrap').hidden=!$('#search-wrap').hidden;if(!$('#search-wrap').hidden)$('#search').focus();break;case'clear-search':state.search='';$('#search').value='';$('#search-wrap').hidden=true;render();break;case'calendar-today':state.anchor=today();state.selected=today();render();break;case'previous':case'next':{const n=ds.action==='next'?1:-1;state.anchor=state.view==='month'?shiftMonth(state.anchor,n):addDays(state.anchor,n*7);state.selected=state.anchor;render();break}}});
+document.addEventListener('click',async e=>{const b=e.target.closest('button,a.brand,[data-select]');if(!b)return;if(b.matches('a.brand')){e.preventDefault();state.page='list';state.filter='today';render();return}const ds=b.dataset;if(ds.page){state.page=ds.page;render()}else if(ds.filter){state.filter=ds.filter;state.page='list';render()}else if(ds.view){state.view=ds.view;render()}else if(ds.edit){openEditor(ds.edit)}else if(ds.toggle){const t=tasks.find(t=>t.id===ds.toggle);mutate(t.id,{completed:!t.completed,completedDate:!t.completed?(t.date&&t.date<today()?t.date:today()):''})}else if(ds.restore){mutate(ds.restore,{deletedAt:null});toast('计划已恢复')}else if(ds.newDate){openEditor(null,ds.newDate)}else if(ds.select){state.selected=ds.select;if(state.page!=='calendar'){state.page='calendar';state.view='month';state.anchor=ds.select}render()}else if(ds.mini){state.miniMonth=shiftMonth(state.miniMonth,Number(ds.mini));renderMini()}else if(ds.date){$('#task-date').value=ds.date==='today'?today():ds.date==='tomorrow'?addDays(today(),1):'';if(ds.date==='none')$('#task-time').value=''}else switch(ds.action){case'new':openEditor();break;case'cloud-sync':sync();break;case'cloud-import':importGuest();break;case'cloud-logout':if(await confirmAction('退出当前账号？','待同步内容仍保留在此账号的设备缓存里，下次登录后继续同步。')){await cloudClient.auth.signOut({scope:'local'});}break;case'install':$('#install-dialog').showModal();break;case'close-install':$('#install-dialog').close();break;case'close-editor':closeEditor();break;case'delete-task':deleteTask();break;case'copy-task':$('#task-id').value='';$('#editor-heading').textContent='复制计划';$('#editor-extra').hidden=true;$('#task-completed').checked=false;$('#completed-date-field').hidden=true;toast('修改日期后保存，即可保留两份计划');break;case'settings':renderSettings();$('#settings-dialog').showModal();break;case'close-settings':$('#settings-dialog').close();break;case'export':exportData();break;case'import':$('#import-file').click();break;case'toggle-completed':setShowCompleted(!prefs.showCompleted);break;case'hide-demo':prefs.hideDemo=true;write('rixu-prefs-v1',prefs);render();break;case'search':$('#search-wrap').hidden=!$('#search-wrap').hidden;if(!$('#search-wrap').hidden)$('#search').focus();break;case'clear-search':state.search='';$('#search').value='';$('#search-wrap').hidden=true;render();break;case'calendar-today':state.anchor=today();state.selected=today();render();break;case'previous':case'next':{const n=ds.action==='next'?1:-1;state.anchor=state.view==='month'?shiftMonth(state.anchor,n):addDays(state.anchor,n*7);state.selected=state.anchor;render();break}}});
 document.addEventListener('keydown',e=>{if(e.target.matches('input,textarea,select'))return;if(e.target.matches('[data-select]')&&(e.key==='Enter'||e.key===' ')){e.preventDefault();e.target.click()}if(e.key.toLowerCase()==='n'&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&!document.querySelector('dialog[open]')){e.preventDefault();openEditor()}});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){render();sync()}});
 window.addEventListener('online',sync);window.addEventListener('storage',e=>{if(e.key===storageKey||e.key===queueKey){tasks=read(storageKey,[]);pending=read(queueKey,[]);render()}});
@@ -76,10 +79,63 @@ if(!Array.isArray(initial)){
 render();
 if(tasks.length)persistSnapshot();
 if(serverMode){sync();setInterval(sync,6000)}
+await initializeCloud();
 let offlineReady=false;
 if('serviceWorker'in navigator&&location.protocol!=='file:'){
   navigator.serviceWorker.register('./sw.js').then(()=>navigator.serviceWorker.ready).then(()=>{offlineReady=true;$('#offline-status').textContent='离线页面已就绪，之后可以断网打开。'}).catch(()=>{$('#offline-status').textContent='离线页面准备失败，请联网重新打开；已有记录仍保存在设备。'});
 }else $('#offline-status').textContent='当前打开方式不支持离线安装，请使用正式 HTTPS 地址。';
 if(!serverMode&&!read('rixu-install-seen',false)&&!matchMedia('(display-mode: standalone)').matches&&!navigator.standalone){
   $('#install-dialog').showModal();write('rixu-install-seen',true);
+}
+
+function renderCloud(){
+  if(!$('#cloud-account'))return;
+  $('#cloud-account').textContent=cloud?.user?`已登录：${cloud.user.email}`:'未登录，仅保存到此设备。';
+  $('#cloud-login').hidden=!!cloud?.user;$('#cloud-controls').hidden=!cloud?.user;
+  if(cloud?.user)$('#cloud-message').textContent=cloud.status;
+}
+async function initializeCloud(){
+  const cfg=window.RIXU_CONFIG;
+  if(serverMode||!cfg?.supabaseUrl||!window.supabase)return;
+  cloudClient=window.supabase.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey,{
+    auth:{storageKey:'rixu-auth-v1',persistSession:true,autoRefreshToken:true,detectSessionInUrl:false},
+    global:{fetch:(url,options={})=>fetch(url,{...options,signal:options.signal||AbortSignal.timeout(12000)})}
+  });
+  cloud=new CloudSync({client:cloudClient,storage:localStorage,getTasks:()=>tasks,
+    switchAccount(user){
+      closeEditor(); accountScope=user?`user:${user.id}`:'guest';
+      storageKey=user?`rixu-data-v1:${user.id}`:'rixu-data-v1';
+      tasks=read(storageKey,[]);render();
+    },
+    setTasks(next){if(next.every(validateTask)){tasks=next;write(storageKey,tasks);persistSnapshot();render()}else throw new Error('云端计划格式不完整，已保留本机记录')},
+    changed(){updateSync()}
+  });
+  const cached=read('rixu-auth-v1',null);
+  if(cached?.user?.id){await cloud.activate(cached.user);cloud.sync()}
+  cloudClient.auth.getSession().then(async({data,error})=>{if(error)return;if(data?.session){await cloud.activate(data.session.user);cloud.sync()}}).catch(()=>{});
+  cloudClient.auth.onAuthStateChange((_event,session)=>{setTimeout(async()=>{await cloud.activate(session?.user||null);if(session)cloud.sync()},0)});
+  setInterval(()=>{if(!document.hidden)cloud.sync()},7000);
+}
+$('#cloud-login').addEventListener('submit',async event=>{
+  event.preventDefault();if(!cloudClient){toast('同步服务暂时不可用，请联网重新打开');return}
+  const button=event.submitter||$('#cloud-login button[type=submit]');button.disabled=true;$('#cloud-message').textContent='正在登录…';
+  try{
+    const {data,error}=await cloudClient.auth.signInWithPassword({email:$('#cloud-email').value.trim(),password:$('#cloud-password').value});
+    $('#cloud-password').value='';if(error)throw error;
+    await cloud.activate(data.user);await cloud.sync();
+    if(read('rixu-data-v1',[]).length&&!read(`rixu-import-prompt:${data.user.id}`,false)){
+      write(`rixu-import-prompt:${data.user.id}`,true);await importGuest();
+    }
+  }catch(error){$('#cloud-message').textContent=error.code==='invalid_credentials'?'邮箱或密码不正确。请使用已有的周期记账号。':'登录失败或网络超时，请检查网络后重试。'}finally{button.disabled=false}
+});
+async function importGuest(){
+  const guest=read('rixu-data-v1',[]);if(!cloud?.user)return;
+  if(!guest.length){toast('没有需要合并的未登录计划');return}
+  const userId=cloud.user.id;
+  if(!await confirmAction('合并本机计划？',`将 ${guest.length} 条未登录计划合并到 ${cloud.user.email}。\n保留原本机副本；相同 ID 的云端计划会跳过。`))return;
+  if(cloud.user?.id!==userId)return;
+  await cloud.sync();
+  const existing=new Set(tasks.map(t=>t.id));importBusy=true;
+  for(const task of guest){if(existing.has(task.id))continue;const {id,...patch}=task;mutate(id,patch)}
+  importBusy=false;saveLocal();toast('本机计划已合并，联网后同步');
 }

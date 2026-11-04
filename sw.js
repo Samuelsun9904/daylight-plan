@@ -1,6 +1,6 @@
-const CACHE='rixu-shell-v2';
+const CACHE='rixu-shell-v3';
 const BASE=new URL('./',self.location.href);
-const SHELL=['./','index.html','style.css','app.js','storage.js','runtime-config.js','icon.svg','icon-192.png','icon-512.png','manifest.webmanifest'];
+const SHELL=['./','index.html','style.css','app.js','storage.js','cloud.js','vendor/supabase.min.js','runtime-config.js','icon.svg','icon-192.png','icon-512.png','manifest.webmanifest'];
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL.map(path=>new URL(path,BASE).href))).then(()=>self.skipWaiting()));
 });
@@ -14,11 +14,11 @@ self.addEventListener('fetch',event=>{
     const controller=new AbortController();
     const timer=setTimeout(()=>controller.abort(),4000);
     try{
-      const response=await fetch(event.request,{signal:controller.signal});
+      const response=await fetch(event.request,{signal:controller.signal,cache:'no-cache'});
       if(response.ok){const cache=await caches.open(CACHE);await cache.put(event.request,response.clone())}
       return response;
     }catch{
-      return (await caches.match(event.request))||(event.request.mode==='navigate'?await caches.match(new URL('./',BASE).href):null)||Response.error();
+      return (await caches.match(event.request,{ignoreSearch:true}))||(event.request.mode==='navigate'?await caches.match(new URL('./',BASE).href):null)||Response.error();
     }finally{clearTimeout(timer)}
   })());
 });
