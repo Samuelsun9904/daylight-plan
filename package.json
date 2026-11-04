@@ -1,1 +1,1 @@
-{"name":"rixu-personal-planner","version":"0.2.0","private":true,"type":"module","scripts":{"check":"node --check public/app.js && node --check public/storage.js && node --check public/sw.js"}}
+{"name": "rixu-personal-planner", "version": "0.3.0", "private": true, "type": "module", "scripts": {"check": "node --check public/app.js && node --check public/storage.js && node --check public/cloud.js && node --check public/sw.js", "test": "node --test tests/cloud-sync.test.js"}}

@@ -6,3 +6,5 @@
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 
 .install-steps{padding-left:22px;color:#6f816b;font-size:13px;line-height:2}.install-steps li{padding-left:5px;margin:15px 0}.install-steps strong{color:var(--green);font-weight:600}
+
+.cloud-help,#cloud-message{font-size:11px;line-height:1.8;color:#71836c}#cloud-message{color:#337968}#cloud-login .field{margin-bottom:12px}#cloud-controls{display:flex;flex-wrap:wrap;gap:7px}button:disabled{opacity:.5;cursor:wait}

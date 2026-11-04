@@ -10,22 +10,22 @@ function database() {
   });
   return opening;
 }
-export async function loadSnapshot() {
+export async function loadSnapshot(scope = 'guest') {
   const db = await database();
   return new Promise((resolve, reject) => {
-    const request = db.transaction('snapshots').objectStore('snapshots').get('latest');
+    const request = db.transaction('snapshots').objectStore('snapshots').get(scope === 'guest' ? 'latest' : scope);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 let writes = Promise.resolve();
-export function saveSnapshot(tasks) {
+export function saveSnapshot(tasks, scope = 'guest') {
   const snapshot = { tasks: structuredClone(tasks), savedAt: new Date().toISOString() };
   const next = writes.catch(() => {}).then(async () => {
     const db = await database();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction('snapshots', 'readwrite');
-      transaction.objectStore('snapshots').put(snapshot, 'latest');
+      transaction.objectStore('snapshots').put(snapshot, scope === 'guest' ? 'latest' : scope);
       transaction.oncomplete = resolve;
       transaction.onerror = () => reject(transaction.error);
       transaction.onabort = () => reject(transaction.error);
