@@ -1,6 +1,6 @@
-const CACHE='rixu-shell-v3';
+const CACHE='rixu-shell-v4';
 const BASE=new URL('./',self.location.href);
-const SHELL=['./','index.html','style.css','app.js','storage.js','cloud.js','vendor/supabase.min.js','runtime-config.js','icon.svg','icon-192.png','icon-512.png','manifest.webmanifest'];
+const SHELL=['./','index.html','style.css','app.js','storage.js','cloud.js','subtasks.js','vendor/supabase.min.js','runtime-config.js','icon.svg','icon-192.png','icon-512.png','manifest.webmanifest'];
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL.map(path=>new URL(path,BASE).href))).then(()=>self.skipWaiting()));
 });

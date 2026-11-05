@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
-FIELDS = {'title','date','time','notes','category','priority','completed','completedDate','createdAt','updatedAt','deletedAt'}
+FIELDS = {'title','date','time','notes','category','priority','completed','completedDate','createdAt','updatedAt','deletedAt','subtasks'}
 
 def valid_date(value, optional=True):
     if optional and value == '': return True
@@ -20,6 +20,18 @@ def valid_date(value, optional=True):
     except (ValueError,TypeError): return False
 
 def validate(task):
+    children=task.get('subtasks',[])
+    if not isinstance(children,list) or len(children)>100: raise ValueError('无效子任务')
+    ids=set()
+    for child in children:
+        if not isinstance(child,dict) or not isinstance(child.get('id'),str) or not 1<=len(child['id'])<=100 or child['id'] in ids: raise ValueError('无效子任务ID')
+        ids.add(child['id'])
+        if not isinstance(child.get('title'),str) or not 1<=len(child['title'].strip())<=200 or not isinstance(child.get('completed'),bool): raise ValueError('无效子任务内容')
+        stamp=child.get('completedAt')
+        if not isinstance(stamp,str) or (not child['completed'] and stamp): raise ValueError('无效子任务完成时间')
+        if child['completed']:
+            try: dt.datetime.fromisoformat(stamp.replace('Z','+00:00'))
+            except ValueError: raise ValueError('无效子任务完成时间')
     if not isinstance(task.get('title'),str) or not 1 <= len(task['title'].strip()) <= 200: raise ValueError('无效标题')
     if not valid_date(task.get('date')): raise ValueError('无效日期')
     if not isinstance(task.get('notes'),str) or len(task['notes']) > 10000: raise ValueError('无效备注')

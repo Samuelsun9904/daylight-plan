@@ -54,7 +54,7 @@ export class CloudSync {
     }catch(error){
       if(!valid())return;
       const code=String(error.code||'');
-      this.notify(['PGRST205','PGRST202','42P01'].includes(code)?'云端尚未初始化':error.status===401||code==='PGRST301'?'登录已过期，请重新登录':`离线或连接失败，待同步 ${this.ops.length} 项`);
+      this.notify(['PGRST205','PGRST202','42P01'].includes(code)?'云端尚未初始化':error.message==='Invalid fields'?'需要运行子任务云端升级脚本':error.status===401||code==='PGRST301'?'登录已过期，请重新登录':`离线或连接失败，待同步 ${this.ops.length} 项`);
       this.error=error;
     }
   }

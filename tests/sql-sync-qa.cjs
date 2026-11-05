@@ -19,5 +19,12 @@ await apply([{id:'task',opId:'1',patch:task}]);assert.equal((await db.query("sel
 await db.exec(`set request.jwt.claim.sub='${b}'`);assert.equal((await db.query('select * from public.rixu_tasks')).rows.length,0);console.log('PASS SQL second account cannot read first account');
 try{await db.exec("insert into public.rixu_tasks(owner_id,task_id,payload) values('11111111-1111-4111-8111-111111111111','illegal','{}')");assert.fail('write allowed')}catch(e){assert.match(e.message,/permission denied/)}console.log('PASS direct table writes denied');
 await db.exec('reset role;set role anon');try{await apply([]);assert.fail('anon rpc allowed')}catch(e){assert.match(e.message,/permission denied/)}console.log('PASS anonymous RPC denied');
+await db.exec(`reset role;set role authenticated;set request.jwt.claim.sub='${a}'`);
+const children=[{id:'child-1',title:'第一讲1',completed:true,completedAt:'2026-11-04T03:22:00.000Z'}];
+await apply([{id:'task',opId:'subtask-save',patch:{subtasks:children}}]);
+assert.deepEqual((await db.query("select payload->'subtasks' children from public.rixu_tasks where task_id='task'")).rows[0].children,children);console.log('PASS SQL subtasks and completion times persisted');
+await assert.rejects(()=>apply([{id:'task',opId:'invalid-subtask',patch:{subtasks:[{...children[0],completedAt:'bad-time'}]}}]));
+await assert.rejects(()=>apply([{id:'task',opId:'duplicate-subtask',patch:{subtasks:[children[0],children[0]]}}]));console.log('PASS SQL rejects invalid timestamps and duplicate child IDs');
+await db.exec('reset role');await db.exec(fs.readFileSync(require('node:path').join(__dirname,'../migrations/002_subtasks.sql'),'utf8'));console.log('PASS upgrade migration is repeatable and preserves existing data');
 await db.close();
 })().catch(e=>{console.error(e);process.exit(1)});
